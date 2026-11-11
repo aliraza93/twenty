@@ -1,0 +1,123 @@
+name: twenty
+
+services:
+  server:
+    image: ${TWENTY_IMAGE:-ghcr.io/aliraza93/twenty:latest}
+    stop_grace_period: 120s
+    volumes:
+      - server-local-data:/app/packages/twenty-server/.local-storage
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NODE_PORT: 3000
+      NODE_OPTIONS: "--max-old-space-size=768"
+      PG_DATABASE_URL: postgres://${PG_DATABASE_USER}:${PG_DATABASE_PASSWORD}@db:5432/${PG_DATABASE_NAME}
+      SERVER_URL: ${SERVER_URL}
+      REDIS_URL: redis://redis:6379
+      APP_SECRET: ${APP_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      STORAGE_TYPE: local
+      DISABLE_DB_MIGRATIONS: "false"
+      DISABLE_CRON_JOBS_REGISTRATION: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: curl --fail http://localhost:3000/healthz
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+    restart: always
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    image: ${TWENTY_IMAGE:-ghcr.io/aliraza93/twenty:latest}
+    command: ["yarn", "worker:prod"]
+    volumes:
+      - server-local-data:/app/packages/twenty-server/.local-storage
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=448"
+      PG_DATABASE_URL: postgres://${PG_DATABASE_USER}:${PG_DATABASE_PASSWORD}@db:5432/${PG_DATABASE_NAME}
+      SERVER_URL: ${SERVER_URL}
+      REDIS_URL: redis://redis:6379
+      APP_SECRET: ${APP_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      STORAGE_TYPE: local
+      DISABLE_DB_MIGRATIONS: "true"
+      DISABLE_CRON_JOBS_REGISTRATION: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+    restart: always
+    logging: *default-logging
+
+  db:
+    image: postgres:16
+    # Tuned for a 4 GB droplet shared with the wishdumps PHP stack.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=96MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=48MB
+      - -c
+      - max_connections=50
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_DB: ${PG_DATABASE_NAME}
+      POSTGRES_USER: ${PG_DATABASE_USER}
+      POSTGRES_PASSWORD: ${PG_DATABASE_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_DATABASE_USER} -d ${PG_DATABASE_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    restart: always
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--maxmemory", "64mb", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 96M
+    restart: always
+    logging: *default-logging
+
+volumes:
+  db-data:
+  server-local-data:
