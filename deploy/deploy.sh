@@ -4,6 +4,9 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/twenty}"
+# Every docker compose call must resolve to this file; a bare
+# `docker compose` here would find no default file and fail silently.
+export COMPOSE_FILE=docker-compose.prod.yml
 NEW_IMAGE="${1:-}"
 HEALTH_URL="http://127.0.0.1:3000/healthz"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-420}"
@@ -24,7 +27,7 @@ docker pull "$NEW_IMAGE" || die "could not pull $NEW_IMAGE"
 
 # Back up the database before migrations run; the server entrypoint migrates
 # automatically on boot and that is the only step here that is not reversible.
-if docker compose ps --status running --services 2>/dev/null | grep -qx db; then
+if docker compose ps --status running --services | grep -qx db; then
   log "Backing up database"
   mkdir -p backups
   BACKUP="backups/pre-deploy-$(date +%Y%m%d-%H%M%S).sql.gz"
@@ -44,18 +47,18 @@ sed -i -E "s#^TWENTY_IMAGE=.*#TWENTY_IMAGE=${NEW_IMAGE//#/\\#}#" .env
 grep -qE '^TWENTY_IMAGE=' .env || echo "TWENTY_IMAGE=$NEW_IMAGE" >> .env
 
 log "Starting stack"
-docker compose -f docker-compose.prod.yml up -d --remove-orphans
+docker compose up -d --remove-orphans
 
 log "Waiting for health (up to ${HEALTH_TIMEOUT}s)"
 deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
 until curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
     echo "--- server logs (tail) ---"
-    docker compose -f docker-compose.prod.yml logs --tail=60 server || true
+    docker compose logs --tail=60 server || true
     if [ -n "$PREVIOUS_IMAGE" ] && [ "$PREVIOUS_IMAGE" != "$NEW_IMAGE" ]; then
       log "Unhealthy, rolling back to $PREVIOUS_IMAGE"
       sed -i -E "s#^TWENTY_IMAGE=.*#TWENTY_IMAGE=${PREVIOUS_IMAGE//#/\\#}#" .env
-      docker compose -f docker-compose.prod.yml up -d
+      docker compose up -d
     fi
     die "server did not become healthy within ${HEALTH_TIMEOUT}s"
   fi
@@ -68,5 +71,5 @@ log "Pruning old images"
 docker image prune -af --filter "until=168h" >/dev/null 2>&1 || true
 
 log "Deployed"
-docker compose -f docker-compose.prod.yml ps
+docker compose ps
 curl -fsS "$HEALTH_URL" && echo
