@@ -31,9 +31,12 @@ if docker compose ps --status running --services | grep -qx db; then
   log "Backing up database"
   mkdir -p backups
   BACKUP="backups/pre-deploy-$(date +%Y%m%d-%H%M%S).sql.gz"
+  # Sourced in a subshell on purpose: exporting .env here would put the OLD
+  # TWENTY_IMAGE in the environment, and compose prefers the environment over
+  # the .env file, so `up -d` would silently redeploy the image being replaced.
   # shellcheck disable=SC1091
-  set -a; . ./.env; set +a
-  if docker compose exec -T db pg_dump -U "$PG_DATABASE_USER" "$PG_DATABASE_NAME" | gzip > "$BACKUP"; then
+  if ( set -a; . ./.env; set +a
+       docker compose exec -T db pg_dump -U "$PG_DATABASE_USER" "$PG_DATABASE_NAME" ) | gzip > "$BACKUP"; then
     echo "wrote $BACKUP ($(du -h "$BACKUP" | cut -f1))"
     ls -1t backups/pre-deploy-*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm --
   else
@@ -48,6 +51,13 @@ grep -qE '^TWENTY_IMAGE=' .env || echo "TWENTY_IMAGE=$NEW_IMAGE" >> .env
 
 log "Starting stack"
 docker compose up -d --remove-orphans
+
+# A healthy server is not proof of a deploy: the old image is healthy too.
+# Assert the containers actually run what was asked for.
+for svc in server worker; do
+  running="$(docker inspect -f '{{.Config.Image}}' "$(docker compose ps -q "$svc")" 2>/dev/null || true)"
+  [ "$running" = "$NEW_IMAGE" ] || die "$svc runs ${running:-nothing}, expected $NEW_IMAGE"
+done
 
 log "Waiting for health (up to ${HEALTH_TIMEOUT}s)"
 deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
