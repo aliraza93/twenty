@@ -107,9 +107,19 @@ systemctl reload nginx
 
 if [ ! -f "$CERT_PATH" ]; then
   log "Certificate"
-  [ -n "$CERT_EMAIL" ] || die "set CERT_EMAIL=you@example.com to issue the certificate"
+  # Reuse the existing certbot account (the wishdumps certs registered without
+  # an email); only a first-ever registration needs one.
+  CERT_ARGS=""
+  if ls /etc/letsencrypt/accounts/*/*/regr.json >/dev/null 2>&1; then
+    echo "using existing certbot account"
+  elif [ -n "$CERT_EMAIL" ]; then
+    CERT_ARGS="-m $CERT_EMAIL"
+  else
+    CERT_ARGS="--register-unsafely-without-email"
+  fi
+  # shellcheck disable=SC2086
   certbot certonly --webroot -w /var/www/certbot \
-    -d "$DOMAIN" --non-interactive --agree-tos -m "$CERT_EMAIL"
+    -d "$DOMAIN" --non-interactive --agree-tos $CERT_ARGS
   cp "$SRC/nginx/${DOMAIN}.conf" "/etc/nginx/sites-available/${DOMAIN}"
   nginx -t || die "nginx config test failed after cert install"
   systemctl reload nginx
