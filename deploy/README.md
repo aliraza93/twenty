@@ -87,6 +87,13 @@ docker stats --no-stream
 ./backup.sh
 ```
 
+`backup.sh` is only nightly once cron runs it. Install as `deploy`, keeping
+the existing wishdumps entry:
+
+```bash
+( crontab -l; echo "30 3 * * * /opt/twenty/backup.sh >> /opt/twenty/backups/backup.log 2>&1" ) | crontab -
+```
+
 Restore a dump:
 
 ```bash
